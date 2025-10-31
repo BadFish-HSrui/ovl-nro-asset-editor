@@ -4,7 +4,7 @@ from collections import defaultdict
 
 defaultPath = "default.jpg"
 
-print("NRO Asset Editor v1.2")
+print("NRO/OVL Asset Editor v2.0")
 config = defaultdict(None)
 sys.argv += [ None ] * 2
 
@@ -18,11 +18,11 @@ except:
 hasGUI = False
 for x in range(1, len(sys.argv), 2):
 	arg = sys.argv[x]
-	if arg and arg[2:] in [ "title", "author", "version", "icon", "nro" ]:
+	if arg and arg[2:] in [ "title", "author", "version", "icon", "nro", "ovl" ]:
 		config[arg[2:]] = sys.argv[x + 1]
 
 if len(config) == 0:
-	print("usage:\n\tpython3 maker.py [--nro /path/to/file.nro] [--title \"Your App Title\"] [--icon /path/to/icon.(png|jpg)] [--author \"Your Author\"] [--version x.x.x]")
+	print("usage:\n\tpython3 maker.py [--nro /path/to/file.nro] [--ovl /path/to/file.ovl] [--title \"Your App Title\"] [--icon /path/to/icon.(png|jpg)] [--author \"Your Author\"] [--version x.x.x]")
 	print("\tNo valid arguments specified, going to run GUI!")
 	hasGUI = True
 else:
@@ -234,7 +234,10 @@ class Editor:
 			self.data = binary.read()
 			data = self.data
 
-			# verify NRO0 format
+			# Check if it's an OVL file by extension
+			is_ovl_file = self.filename.lower().endswith('.ovl')
+
+			# verify NRO0 format (same for both NRO and OVL)
 			if data[0x10:0x14] != b"NRO0":
 				return False
 
@@ -246,51 +249,75 @@ class Editor:
 			self.asset = Asset(size)
 			asset = self.asset
 
-			if len(data) > size+4 and data[size:size+0x4] == B"ASET":
+			if len(data) > size+4 and data[size:size+0x4] == b"ASET":
 				# load the asset data
 				self.asset.load(bytearray(data[size:]))
 
-				if hasPIL:
+				# Skip image processing for OVL files
+				if hasPIL and not is_ovl_file:
 					self.image = Image.open(io.BytesIO(asset.icon))
+				elif is_ovl_file:
+					# For OVL files, use default image
+					self.image = Image.open(defaultPath)
 
 				# truncate the old assset data from memory
 				self.data = data[:size]
 
 	# prompt for a file browser to select a .NRO file to extract data from
 	def browse(self):
-		self.filename = filedialog.askopenfilename(title = "Select NRO",filetypes = (("NRO Files","*.nro"),("All Files","*.*"))) or self.filename
+		self.filename = filedialog.askopenfilename(title = "Select NRO/OVL",filetypes = (("NRO/OVL Files","*.nro;*.ovl"),("All Files","*.*"))) or self.filename
 
 		self.loadBinaryData()
 
-		self.name.set(asset.name)
-		self.author.set(asset.author)
-		self.version.set(asset.version)
+		self.name.set(self.asset.name)
+		self.author.set(self.asset.author)
+		self.version.set(self.asset.version)
 		
-		image2 = ImageTk.PhotoImage(self.image)
-		self.imagebox.configure(image=image2)
-		self.imagebox.image = image2
-
+		# Check if file is OVL format
+		is_ovl_file = self.filename.lower().endswith('.ovl')
+		
+		if not is_ovl_file:
+			# Only show image for NRO files
+			image2 = ImageTk.PhotoImage(self.image)
+			self.imagebox.configure(image=image2)
+			self.imagebox.image = image2
+			self.imagebox.grid(row=0, rowspan=8, column=2)  # Show image area
+			# Set window size for NRO files (with image)
+			if hasattr(self, 'root'):
+				self.root.geometry("550x300")
+		else:
+			# Hide image area for OVL files
+			self.imagebox.grid_remove()
+			# Set smaller window size for OVL files (without image)
+			if hasattr(self, 'root'):
+				self.root.geometry("300x200")
 
 		if self.filename:
-			# enable all buttons and fields
+			# enable save button and text fields
 			self.elements[0].configure(state = "active")
-			for elem in self.elements[1:]:
-				elem.configure(state = "normal")
-
+			for i, elem in enumerate(self.elements[1:], 1):
+				if i == 4 and is_ovl_file:  # Index 4 is the "Open Image..." button
+					elem.grid_remove()  # Hide image button for OVL files
+				elif i == 4 and not is_ovl_file:  # Show image button for NRO files
+					elem.grid(row=3, column=1, padx=(50, 5))
+					elem.configure(state = "normal")
+				else:
+					elem.configure(state = "normal")
 
 if hasGUI:
 	root = tk.Tk()
-	root.title("NRO Asset Editor")
+	root.title("NRO/OVL Asset Editor")
 
 	# batch of UI input elements
 	elems = []
 	editor = Editor(elems)
+	editor.root = root  # Add reference to root window
 
 	# frame containing load and save buttons
 	fileframe = tk.Frame(root)
 	fileframe.grid(row=0, column=2, columnspan=1)
 
-	tk.Button(fileframe, text="Load NRO...", command=editor.browse).grid(row=0, column=0)
+	tk.Button(fileframe, text="Load NRO/OVL...", command=editor.browse).grid(row=0, column=0)
 	saveb = tk.Button(fileframe, text="Save", state="disabled", command=editor.saveNRO)
 	saveb.grid(row=0, column=1)
 	elems.append(saveb)
@@ -332,16 +359,21 @@ if hasGUI:
 	root.mainloop()
 
 else:
-	nro = config["nro"]
-	del config["nro"]
-	if not nro:
-		print("[ERROR] No nro file specified, please provide one with --nro /path/file.nro")
+	# Handle both nro and ovl files in command line mode
+	file_path = config.get("nro") or config.get("ovl")
+	if "nro" in config:
+		del config["nro"]
+	if "ovl" in config:
+		del config["ovl"]
+	
+	if not file_path:
+		print("[ERROR] No nro or ovl file specified, please provide one with --nro /path/file.nro or --ovl /path/file.ovl")
 		exit(1)
-	print(f"-> Opening '{nro}'...")
+	print(f"-> Opening '{file_path}'...")
 
 	opDone = False
 	editor = Editor()
-	editor.filename = nro
+	editor.filename = file_path
 	editor.loadBinaryData()
 
 	asset = editor.asset
@@ -373,15 +405,15 @@ else:
 				config["version"] = asset.version
 	
 	if opDone:
-		print(f"-> Saving '{nro}'...")
+		print(f"-> Saving '{file_path}'...")
 		editor.saveNRO(config)
 
-		# load it again so we can show the new values
+		# verify our changes
 		e2 = Editor()
 		e2.filename = editor.filename
 		e2.loadBinaryData()
 		asset = e2.asset
-		print(f"-> NRO was updated!")
+		print(f"-> File was updated!")
 		print(f"-> New Metadata:")
 		print(f"--> Title: {asset.name}")
 		print(f"--> Author: {asset.author}")
